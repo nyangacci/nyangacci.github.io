@@ -1,0 +1,974 @@
+---
+title: "Analysis of South Korean Youth Labour Trends and Corporate Type Preferences"
+author: "Do Hyoun Kim"
+date: "`r Sys.Date()`"
+output: rmdformats::robobook
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+library(tidyverse)
+library(sf)
+library(devtools)
+library(dplyr)
+library(ggplot2)
+library(RColorBrewer)
+library(patchwork)
+library(cowplot)
+
+
+#---------------------------------------------------------------------
+
+CorpStf <- read_csv("Data/CorpStf.csv")
+
+# Deleting '*' in numerical values
+CorpStf$'2009' <- as.numeric(gsub("\\*+", "", CorpStf$'2009'))
+CorpStf$'2011' <- as.numeric(gsub("\\*+", "", CorpStf$'2011'))
+CorpStf$'2013' <- as.numeric(gsub("\\*+", "", CorpStf$'2013'))
+CorpStf$'2015' <- as.numeric(gsub("\\*+", "", CorpStf$'2015'))
+CorpStf$'2017' <- as.numeric(gsub("\\*+", "", CorpStf$'2017'))
+CorpStf$'2019' <- as.numeric(gsub("\\*+", "", CorpStf$'2019'))
+CorpStf$'2021' <- as.numeric(gsub("\\*+", "", CorpStf$'2021'))
+CorpStf$'2023' <- as.numeric(gsub("\\*+", "", CorpStf$'2023'))
+
+CorpStf <- CorpStf |>
+  pivot_longer(
+    cols = -(1:4),
+    names_to = "YEAR",
+    values_to = "PREFERENCE"
+  )
+
+CorpStf <- CorpStf |>
+  mutate(AGE = case_when(
+    VARIABLE == "T1518"~VARIABLE,
+    VARIABLE == "T1924"~VARIABLE,
+    VARIABLE == "T2529"~VARIABLE)) |>
+  mutate(SEX = case_when(
+    VARIABLE == "All"~VARIABLE,
+    VARIABLE == "Male"~VARIABLE,
+    VARIABLE == "Female"~VARIABLE)) |>
+  mutate(INCOME = case_when(
+    VARIABLE == "~1M"~VARIABLE,
+    VARIABLE == "1~2M"~VARIABLE,
+    VARIABLE == "2~3M"~VARIABLE,
+    VARIABLE == "3~4M"~VARIABLE,
+    VARIABLE == "4~5M"~VARIABLE,
+    VARIABLE == "5~6M"~VARIABLE,
+    VARIABLE == "6M~"~VARIABLE))
+
+CorpStf <- CorpStf |>
+  subset(select=-VARIABLE)
+CorpStf <- CorpStf[, c(6:8, 1:5)]
+CorpStf <- CorpStf[, c(7, 1:6, 8)] |>
+  arrange(YEAR)
+CorpStf <- CorpStf |>
+  subset(select=-REG_CODE)
+
+#---------------------------------------------------------------------
+
+LabSex <- read_csv("Data/LabSex.csv")
+LabReg <- read_csv("Data/LabReg.csv")
+
+LabSex$YEAR <- as.character(LabSex$YEAR) |>
+  as.numeric(LabSex$VALUE)
+LabSex$VALUE <- gsub("\\s+", "", as.character(LabSex$VALUE))
+LabSex$VALUE <- as.numeric(LabSex$VALUE)
+
+LabReg$YEAR <- as.character(LabReg$YEAR) |>
+  as.numeric(LabReg$VALUE)
+LabReg$VALUE <- gsub("\\s+", "", as.character(LabReg$VALUE))
+LabReg$VALUE <- as.numeric(LabReg$VALUE)
+
+LabSex$REGION <- "All"
+LabReg$SEX <- "All"
+
+LabComb <- merge(LabSex, LabReg, by = c("YEAR", "AGE", "SEX", "REGION", "LABSTAT", "VALUE"), all = TRUE)
+
+LabComb <- LabComb |>
+  arrange(YEAR, AGE, SEX, REGION, LABSTAT)
+
+LabComb$YEAR <- as.numeric(LabComb$YEAR)
+CorpStf$YEAR <- as.numeric(CorpStf$YEAR)
+
+#---------------------------------------------------------------------
+
+# https://boring9.tistory.com/22 
+KorMap <- st_as_sf(as_tibble(st_read("Data/ctprvn/ctprvn.shp"))) |>
+  subset(select = -CTP_KOR_NM) |>
+  fortify()
+
+KorMap <- KorMap |>
+  mutate(CTP_ENG_NM = ifelse(CTP_ENG_NM == "Jellanam-do", "Jeollanam", CTP_ENG_NM))
+
+KorMap$CTP_ENG_NM <- gsub("-do", "", KorMap$CTP_ENG_NM)
+KorMap$CTP_ENG_NM <- gsub("-si", "", KorMap$CTP_ENG_NM)
+
+KorMap <- KorMap |>
+  rename(REGION = CTP_ENG_NM) |>
+  rename(REG_CODE = CTPRVN_CD)
+
+#---------------------------------------------------------------------
+
+theme_set(theme_bw()) 
+theme_update(strip.background = element_blank(), 
+             panel.border = element_blank())
+
+
+```
+
+
+# Introduction 
+
+Over the last decade, South Korean labour market has experienced significant transformations, particularly among its youth demographic. South Korean firms are projecting a potential labour supply crisis from continuously declining and the world’s lowest birth rate; moreover, the recent COVID-19 pandemic and its subsequent economic recession brought huge shifts in the individuals’ conceptualization of ‘work.’ These evolving preferences, societal shifts, and economic changes have all influenced South Korean youth’s employment choices and corporate preferences.
+
+This study aims to examine the South Korean youth labour trends during the past 15 years in multifaceted dimensions, exploring how demographical, regional, gender, economic, and other societal factors are linked with South Korean youth’s labour choices. The study utilizes three datasets from the Korean Statistical Information Service (KOSIS): “Economically Active Population by Sex/Age,” “Economically Active Population by Administrative District/Age,” and “Workplaces Preferred by Teenagers (Ages 13-34).” The first two datasets offer a detailed demographic breakdown, illustrating youth labour trends across different age, sex, and regional groups within South Korea; the latter provides valuable information on the South Korean youth’s level of interest and preferences in different types of corporations. By analyzing these datasets, this study aims to identify patterns and draw correlations between labour trends, demographic factors and youth corporate preferences and offer insights into the development of the South Korean youth employment landscape and predictions of future labour trends and preferences among South Korean youth.
+
+
+
+
+# Data Collection
+
+## Methodology
+
+The study utilized three datasets from the KOSIS: “Economically Active Population by Sex/Age,” “Economically Active Population by Administrative District/Age,” and “Workplaces Preferred by Teenagers (Ages 13-34).” The first two datasets are part of a monthly Economically Active Population Survey, which collects population demographics from its internal data source and labour-related information from household members residing in approximately 36,000 sample households nationwide aged 15 years or older (sample population size varies yearly). The survey includes information on 54 variables related to personal information and employed, unemployed, and economically inactive populations. From this survey and datasets, the study narrowed down its research population age range to 15-29 and time frame to 3rd quarter of every year from 2009 to 2023 and selected eight variables: year, age, sex, administrative district, youth population, Labour Force Participant (LFP) population, LFP rate, and employment rate.
+
+The third dataset is part of a Social Survey conducted once in November every two years to household members residing in approximately 27,336 sample households nationwide who are 13 years or older (sample population size varies yearly). The study has narrowed down the population age range to 15-29 and the time frame to 2009-2023 and selected six variables: year, age, sex, administrative district, income level, corporate types, and corporate preference.
+
+
+
+## Measurement
+
+The study conducted secondary data collection from the KOSIS website (https://kosis.kr/index/index.do); the study used R Studio programming software for thorough and accurate data cleaning, analytical research, and visualizations of the collected data. The study also retrieved a “ctpvrn_20230729.zip” package of South Korean administrative district map created by GEO Service (https://www.gisdeveloper.co.kr/?p=2332) to conduct several data visualizations of regional data.
+
+The study utilized measures such as year, sex, age, administrative district, youth population, LFP population, LFP rate, employment rate, income level, corporate type, and corporate preference as independent and dependent variables. A detailed definition and description of the measures is provided in the appendix.
+
+
+
+## Ethical Considerations
+
+As the study utilized pre-existing aggregated data from KOSIS in which the personal information of the survey respondents was not depicted, individual informed consent and personal information protection were not directly applicable. Still, the study ensured that all data used were obtained and managed following ethical and legal standards and used solely for academic research purposes.
+
+The study committed to unbiased analysis and reporting of findings, ensuring that data interpretations and conclusions were objective and reflective of the statistical evidence obtained.
+
+
+
+
+# Data Analysis
+
+## 2023 South Korean Youth Population and Labour Demographics
+
+This section offers background information regarding population and labour demographics of South Korean youth in 2023. 
+
+```{r map, fig.width=10, fig.height=5}
+
+totpop <- LabComb |>
+  filter(LABSTAT == "Total Population",
+         YEAR == "2023",
+         SEX == "All",
+         REGION != "All",
+         AGE == "All") |>
+  subset(select=-SEX)
+
+totpop <- left_join(totpop, KorMap, by = "REGION")
+
+
+totpop <- totpop |>
+  mutate(VALUE = VALUE*1000)
+
+totsummary <- totpop |>
+  group_by(REGION) |>
+  summarize(Population = sum(VALUE, na.rm = TRUE))
+
+totsummary <- left_join(totsummary, 
+                        totpop |> select(REGION, geometry), 
+                        by = "REGION") |>
+  distinct(REGION, .keep_all = TRUE)
+
+totmin <- min(totsummary$Population, na.rm = TRUE)
+totmax <- max(totsummary$Population, na.rm = TRUE)
+
+totbreaks <- c(totmin, 100000, 200000, 300000, 400000, 500000, 600000, 2000000, totmax)
+totlabels <- c("<100K", "100-200K", "200-300K", "300-400K", "400-500K", "500-600K", "1.5-2M", ">2M")
+totsummary$qt <- cut(totsummary$Population, breaks = totbreaks, labels = totlabels, include.lowest = TRUE)
+
+ggplot(totsummary, aes(geometry = geometry, fill = qt)) + 
+  geom_sf() +
+  geom_sf_label(aes(label = REGION, geometry = geometry), size = 3.2, label.size = NA, fill = "transparent", stat = "sf_coordinates") +
+  scale_fill_brewer("Population", palette = "GnBu") +
+  theme_void() +
+  theme(
+    line = element_blank(), 
+    axis.text = element_blank(),
+    axis.title = element_blank(),
+    panel.background = element_blank(),
+    legend.text = element_text(size = 11), 
+    legend.title = element_text(size = 12, face="bold"),
+    plot.title = element_text(size = 18, face = "bold")) +
+  ggtitle("Fig 1. 2023 South Korean Total Youth Population")
+  
+
+```
+First, Figure 1 shows that the South Korean youth population is highly concentrated in certain metropolitan cities and provinces such as Seoul, Gyeonggi, and Busan, as well as their neighbouring regions, Incheon and Gyeongsangnam. The youth population is mainly concentrated in Seoul and Gyeonggi, causing a considerable population imbalance. Meanwhile, other regions, such as Ulsan and Sejong, have a very low youth population (<100K) and are thus subject to significant youth labour supply shortages. 
+
+```{r map2, fig.width=10, fig.height=5}
+
+LFPpop <- LabComb |>
+  filter(LABSTAT == "LFP", 
+         YEAR == "2023", 
+         SEX == "All", 
+         REGION != "All",
+         AGE == "All") |>
+  subset(select=-c(SEX, AGE))
+
+LFPpop <- left_join(LFPpop, KorMap, by = "REGION")
+
+LFPpop <- LFPpop |>
+  mutate(VALUE = VALUE*1000)
+
+LFPpop$area <- st_area(LFPpop$geometry) / (1e+6)
+LFPpop$Density <- LFPpop$VALUE /LFPpop$area
+
+LFPsummary <- LFPpop |>
+  group_by(LABSTAT, REGION) |>
+  summarize(Population = sum(VALUE, na.rm = TRUE))
+
+LFPsummary <- left_join(LFPsummary, LFPpop |> select(REGION, geometry), by = "REGION") |>
+  distinct(REGION, .keep_all = TRUE)
+
+LFPmin <- min(LFPsummary$Population, na.rm = TRUE)
+LFPmax <- max(LFPsummary$Population, na.rm = TRUE)
+
+LFPbreaks <- c(LFPmin, 50000, 100000, 150000, 200000, 250000, 300000, 1000000, LFPmax)
+LFPlabels <- c("<50K", "50-100K", "100-150K", "150-200K", "200-250K", "250-300K", "900K-1M", ">1M")
+LFPsummary$qt <- cut(LFPsummary$Population, breaks = LFPbreaks, labels = LFPlabels, include.lowest = TRUE)
+
+# https://rstudio-pubs-static.s3.amazonaws.com/97543_3bd7af6247534a84bc141c02888dc308.html
+LFPpop$qt <- cut(LFPpop$Density, 
+    breaks = quantile(LFPpop$Density, probs = 0:7/7, na.rm = TRUE), 
+    include.lowest = TRUE)
+
+LFPpopplot <- ggplot(LFPsummary, aes(geometry=geometry, fill=qt)) +
+  geom_sf() +
+  theme_void() +
+  scale_fill_brewer("Population", palette = "BuGn") +
+  theme(line = element_blank(), 
+        axis.text=element_blank(),
+        axis.title=element_blank(),
+        panel.background = element_blank(),
+        legend.text = element_text(size = 11), 
+        legend.title = element_text(size = 12, face="bold")) +
+  ggtitle("LFP Population")
+LFPdensplot <- ggplot(LFPpop, aes(geometry = geometry, fill = qt)) + 
+  geom_sf() +
+  theme_void() +
+  scale_fill_brewer("Density", palette = "OrRd") +
+  theme(line = element_blank(), 
+        axis.text=element_blank(),
+        axis.title=element_blank(),
+        panel.background = element_blank(),
+        legend.text = element_text(size = 11), 
+        legend.title = element_text(size = 12, face="bold")) +
+  ggtitle("LFP Population Density") 
+
+combined_plots <- plot_grid(LFPpopplot, LFPdensplot, ncol = 2)
+combined_plots <- ggdraw() +
+  draw_plot(combined_plots) +
+  draw_label("Fig 2. 2023 South Korean LFP Population/Density", size = 18, fontface = "bold", x = 0.5, y = 0.9)
+combined_plots
+
+
+
+
+```
+Figure 2 shows a similar unbalanced population distribution of youth LFP population and population density. Most of the South Korean LFP population resides in Seoul and Gyeonggi; population density in Seoul, Busan, and Incheon is exceptionally high. Other major metropolitan cities such as Daejon, Daegu, Ulsan, and Gwangju also show relatively higher LFP population density than provinces; meanwhile, provinces have relatively low LFP population and population density. Sejong shows both a low LFP population and population density despite being a metropolitan autonomous city as the city was established in 2012.
+
+```{r map3, fig.width=10, fig.height=5}
+
+emprat <- LabComb |>
+  filter(LABSTAT == "emprate",
+         YEAR == "2023",
+         SEX == "All",
+         REGION != "All",
+         AGE != "All") |>
+  subset(select=-SEX)
+
+emprat <- left_join(emprat, KorMap, by = "REGION")
+
+emprat <- emprat |>
+  subset(!is.na(REG_CODE))
+
+emprat_a <- emprat |>
+  filter(AGE == "T1519")
+emprat_b <- emprat |>
+  filter(AGE == "T2024")
+emprat_c <- emprat |>
+  filter(AGE == "T2529")
+
+emprat_a_min <- min(emprat_a$VALUE, na.rm = TRUE)
+emprat_a_max <- max(emprat_a$VALUE, na.rm = TRUE)
+empbreaks_a <- c(emprat_a_min, 2.5, 3, 4, 5, 6, 7, 8, 9, 10, 11, emprat_a_max)
+emplabels_a <- c("Lowest", "2.2-3%**", "3.1-4%", "4.1-5%", "5.1-6%", "6.1-7%", "7.1-8%", "8.1-9%", "9.1-10%", "10.1-11%", "Highest")
+emprat_a$qt <- cut(emprat_a$VALUE, breaks = empbreaks_a, labels = emplabels_a, include.lowest = TRUE)
+
+emprat_b_min <- min(emprat_b$VALUE, na.rm = TRUE)
+emprat_b_max <- max(emprat_b$VALUE, na.rm = TRUE)
+empbreaks_b <- c(emprat_b_min, 26, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, emprat_b_max)
+emplabels_b <- c("Lowest", "34.1-36%", "36.1-38%", "38.1-40%", "40.1-42%",  "42.1-44%", "44.1-46%", "46.1-48%", "48.1-50%", "50.1-52%", "52.1-54%", "Highest")
+emprat_b$qt <- cut(emprat_b$VALUE, breaks = empbreaks_b, labels = emplabels_b, include.lowest = TRUE)
+
+emprat_c_min <- min(emprat_c$VALUE, na.rm = TRUE)
+emprat_c_max <- max(emprat_c$VALUE, na.rm = TRUE)
+empbreaks_c <- c(emprat_c_min, 62, 64, 66, 68, 70, 72, 74, 76, 78, emprat_c_max)
+emplabels_c <- c("Lowest", "62.1-64%", "64.1-66%", "66.1-68%", "68.1-70%", "70.1-72%", "72.1-74%", "74.1-76%", "76.1-78%", "Highest")
+emprat_c$qt <- cut(emprat_c$VALUE, breaks = empbreaks_c, labels = emplabels_c, include.lowest = TRUE)
+
+empplota <- ggplot(emprat_a, aes(geometry = geometry, fill=qt)) + 
+  geom_sf() +
+  theme_void() +
+  scale_fill_brewer("VALUE", palette = "RdYlGn") +
+  theme(line = element_blank(), 
+        axis.text=element_blank(),
+        axis.title=element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none") +
+  ggtitle("Ages 15-19") +
+  geom_sf_label(data = emprat_a |>
+              filter(REGION %in% c("Sejong", "Incheon")), aes(geometry=geometry, label=c( "11.5%", "2.1%")), size=3.5, label.size = NA, fill="transparent", stat = "sf_coordinates", vjust=-0.2, hjust=0.5, fontface = "bold", check_overlap = TRUE)
+
+empplotb <- ggplot(emprat_b, aes(geometry = geometry, fill=qt)) + 
+  geom_sf() +
+  theme_void() +
+  scale_fill_brewer("VALUE", palette = "RdYlGn") +
+  theme(line = element_blank(), 
+        axis.text=element_blank(),
+        axis.title=element_blank(),
+        panel.background = element_blank(),
+        legend.position = "none") +
+  ggtitle("Ages 20-24") +
+  geom_sf_label(data = emprat_b |>
+              filter(REGION %in% c("Sejong", "Jeju")), aes(geometry=geometry, label=c("58.6%", "25.7%")), size=3.5, label.size = NA, fill="transparent", stat = "sf_coordinates", vjust=-0.2, hjust=0.5, fontface = "bold", check_overlap = TRUE)
+
+empplotc <- ggplot(emprat_c, aes(geometry = geometry, fill=qt)) + 
+  geom_sf() +
+  theme_void() +
+  scale_fill_brewer("VALUE", palette = "RdYlGn",
+                    breaks=c("Highest", "Lowest")) +
+  theme(line = element_blank(), 
+        axis.text=element_blank(),
+        axis.title=element_blank(),
+        panel.background = element_blank(),
+        legend.text = element_text(size = 11), 
+        legend.title = element_text(size = 12, face="bold") ) +
+  ggtitle("Ages 25-29") +
+  geom_sf_label(data = emprat_c |>
+              filter(REGION %in% c("Gyeongsangbuk", "Incheon")), aes(geometry=geometry, label=c("55.8%", "78.7%")), size=3.5, label.size = NA, fill="transparent", stat = "sf_coordinates", vjust=-0.2, hjust=0.5, fontface = "bold", check_overlap = TRUE) +
+  guides(fill=guide_legend(title="Employment Rate"))
+
+empplotcomb <- empplota + empplotb + empplotc +
+  plot_layout(ncol = 3)
+
+empplotcomb <- ggdraw() +
+  draw_plot(empplotcomb) +
+  draw_label("Fig 3. 2023 South Korean Youth Employment Rate Summary", size = 18, fontface = "bold", x = 0.5, y = 0.9)
+
+empplotcomb
+
+
+
+```
+Figure 3 compares youth employment rates among South Korean administrative districts by three age levels: ages 15-19, ages 20-24, and ages 25-29. Incheon shows the highest youth employment rate in age groups 15-19 and 25-29, with 11.5% and 78.7%, respectively; Sejong showed the lowest youth employment in age groups 15-19 and 20-24, with 2.1% and 25.7%. Jeju had the highest employment rate among all regions in the 20-24 age group (58.6%); Gyeongsangbuk had the lowest employment rate in the 25-29 age group (55.8%).
+
+Upper regions, including Incheon, Seoul, Gyeonggi, and Gangwon, have generally higher employment rates in all age levels; lower regions, including Jeollabuk, Jeollanam, Gwangju, and Gyeongsangnam, often showed relatively lower employment rates across different age levels. Gyeongsangbuk showed an interesting trend, having relatively stable employment rates in age groups 15-19 and 20-24 but the lowest employment rate in the age group 25-29.
+
+
+
+
+## 2009-2023 South Korean Youth Labour Participation Trends
+
+```{r sex, fig.width=10, fig.height=5}
+
+Labrat <- LabComb |>
+  filter(LABSTAT %in% c("LFPrate", "emprate"),
+         REGION == "All",
+         SEX != "All") |>
+  subset(select=-REGION)
+
+Labrat$size <- rep(2, nrow(Labrat))
+Labrat$size[Labrat$LABSTAT=="emprate"] <- 3
+
+Labrat <- Labrat |>
+  mutate(
+    LABSTAT = case_when(
+      LABSTAT == "emprate" ~ "Employment Rate",
+      LABSTAT == "LFPrate" ~ "LFP Rate",
+      TRUE ~ LABSTAT
+    )
+  )
+
+ggplot(Labrat, aes(x = YEAR, y = VALUE, group = interaction(LABSTAT, SEX))) +
+  facet_wrap(~AGE, scales = "free_y") +
+  geom_line(aes(linetype = LABSTAT, color = SEX, size = size)) +
+  scale_size(range = c(0.75, 1.25)) +
+  guides(linetype = guide_legend(title = "Rate Type"), color = guide_legend(title = "SEX"), size = "none") +
+  labs(title = "Fig 4. Changes in Youth LFP and Employment Rates, 2009-2023",
+       x = "Year",
+       y = "Rate (%)",
+       linetype = "Rate Type",
+       color = "Sex") +
+  theme(
+    panel.border = element_rect(color = "black", fill = NA),
+    panel.spacing = unit(0.5, "lines"),
+    text = element_text(size = 12),
+    title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12), 
+    axis.text = element_text(size = 10),
+    legend.text = element_text(size = 11), 
+    legend.title = element_text(size = 12) 
+  )
+
+
+```
+An interesting pattern in youth LFP and employment rates is depicted in Figure 4. Figure 4 compares LFP and employment rates by sex over the past 15 years across different age groups. Surprisingly, females’ LFP and employment rates are higher than males in all age levels; although female LFP and employment rates in the age group 25-29 were lower than males until 2016, females have exceeded males in their rates since 2017. 
+
+Although there may be many underlying reasons for this gender gap in youth LFP and employment rates, a few possible influencing factors may be gender differences in choosing their jobs and industries, males’ mandatory military service, and consequent differences in time landing on their first career.
+
+Another interesting pattern in Figure 4 is the decreasing male employment rate from 2011 to 2021 and the contradictory increasing female employment rate. One possible explanation may be the increased job competition due to increased female labour participation since the last decade.
+
+
+
+
+## South Korean Youth’s Preferences in Corporate Types
+
+This section analyzes South Korean youth's preferences in different corporate types by two variables: sex and region.
+
+
+### Sex
+
+```{r sex2, fig.width=10, fig.height=4}
+
+corpall <- CorpStf |>
+  subset(is.na(AGE)) |>
+  subset(is.na(INCOME)) |>
+  subset(select=-c(AGE, INCOME)) |>
+  filter(REGION == "All") |>
+  filter(YEAR== "2023") |>
+  filter(CORPTYPE != "Total") |>
+  subset(!is.na(SEX))
+
+ggplot(corpall, aes(x=SEX, y=PREFERENCE, fill=CORPTYPE)) +
+  geom_col(colour = "black") +
+  scale_fill_brewer(palette = "Set3") +
+  labs(title = "Fig 5. 2023 South Korean Youths Prefer to Work In...",
+       x = "Sex",
+       y = "Preference (%)",
+       fill = "Corporate Type") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  coord_flip() +
+  theme(
+    text = element_text(size = 12),
+    title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12), 
+    axis.text = element_text(size = 10),
+    legend.text = element_text(size = 11), 
+    legend.title = element_text(size = 12) 
+  )
+
+
+```
+2023 South Korean youth most preferred to work in big-sized corporations out of all corporate types. Governmental organizations, self-employment, and public corporations were also popular among youth.
+
+2023 youth generally show similar patterns in corporate preferences in both sexes, as depicted in Figure 5. However, females show higher preferences towards governmental organizations, professional corporations, foreign corporations, and overseas employment than males; males prefer big corporations, public corporations, self-employment, and small/mid-sized corporations. This may infer possible gender differences in important factors for job decisions, in which males tend to prefer more economically profitable jobs while females tend to prefer stability and work-life balance.
+
+```{r sex3, fig.width=10, fig.height=4}
+
+corpchr <- CorpStf |>
+  subset(is.na(AGE)) |>
+  subset(is.na(INCOME)) |>
+  subset(select=-c(AGE, INCOME)) |>
+  filter(REGION == "All") |>
+  filter(CORPTYPE != "Total") |>
+  filter(SEX != "All")
+
+corpchr$size <- ifelse(corpchr$CORPTYPE %in% c("Big Corp", "Governmental Organization", "Public Corp", "Professional Corp", "Self-Employment"), 3, 2)
+
+ggplot(corpchr, aes(x = YEAR, y = PREFERENCE, group = CORPTYPE, color = CORPTYPE, size = factor(size))) +
+  facet_wrap(~SEX) +
+  geom_line() +
+  #scale_color_brewer(palette = "Set3") +
+  scale_size_manual(values = c("2" = 0.5, "3" = 1.5), guide = FALSE) +
+  labs(y = "Corporate Preference (%)",
+       x="Year",
+       title = "Fig 6. Changes in Youth's Corporate Preferences, by Sex",
+       color = "Corporate Type") +
+  guides(size = FALSE) +
+  theme(
+    panel.border = element_rect(color = "black", fill = NA),
+    panel.spacing = unit(0.5, "lines"),
+    text = element_text(size = 12),
+    title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12), 
+    axis.text = element_text(size = 10),
+    legend.text = element_text(size = 11), 
+    legend.title = element_text(size = 12) 
+  )
+  
+
+```
+South Korean youth’s corporate preferences have largely shifted over the past 15 years:
+
+1. Despite governmental organizations being initially ranked as the most preferred corporate type among youth, their preference has sharply declined over the past 15 years and is now reversed by big corporations and public corporations.
+2. Big corporations have been increasingly popular since 2017, ranking as the youth’s most preferred corporate type.
+3. Youths’ preference towards self-employment is gradually increasing; preference towards professional corporations has gradually decreased but increased in the past two years.
+4. Although preference towards public corporations gradually increased until 2019, it has been losing popularity since 2021. 
+
+As depicted in Figure 6, the fluctuations in corporate preferences during the 15 years are similar in both sexes. This implies that similar factors (possibly socioeconomic) influence young males’ and females’ corporate preferences.
+
+
+
+### Region
+
+```{r region, fig.width=10, fig.height=5}
+library(treemapify)
+
+corpmos <- CorpStf |>
+  subset(!is.na(REGION)) |>
+  filter(REGION != "All",
+         YEAR== "2023",
+         CORPTYPE != "Total") |>
+  subset(select=-c(YEAR, INCOME, SEX, AGE))
+
+popmos <- LabComb |>
+  subset(!is.na(REGION)) |>
+  filter(REGION != "All",
+         YEAR== "2023",
+         AGE == "All",
+         LABSTAT=="Total Population") |>
+  subset(select=-c(YEAR, SEX, AGE, LABSTAT))
+
+popmos <- left_join(popmos,corpmos, by= "REGION")
+
+popmos$area <- popmos$VALUE * popmos$PREFERENCE
+
+popmos$PREFERENCE <- round(popmos$PREFERENCE, 1)
+
+ggplot(popmos, aes(area = area, label=REGION, fill=CORPTYPE, subgroup=REGION, subgroup2=CORPTYPE)) +
+  geom_treemap() +
+  geom_treemap_subgroup_border(colour="black") +
+   geom_treemap_text(
+    aes(label = PREFERENCE),  
+    place = "centre", colour = "black", alpha = 0.3, min.size = 0) +
+  geom_treemap_subgroup_text(place = "centre", colour = "black",
+                             fontface = "bold", alpha = 0.8, min.size = 0) +
+  geom_treemap_subgroup2_border(colour="black", size=0.5) +
+  scale_fill_brewer(palette = "Set3") +
+  labs(title = "Fig 7. 2023 Corporate Type Preference Summary, by Region Population Size",
+       fill = "Corporate Type") +
+  guides(size = FALSE) +
+  theme(
+    panel.border = element_rect(color = "black", fill = NA),
+    panel.spacing = unit(0.5, "lines"),
+    text = element_text(size = 12),
+    title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12), 
+    axis.text = element_text(size = 10),
+    legend.text = element_text(size = 11), 
+    legend.title = element_text(size = 12) 
+  )
+  
+
+```
+Figure 7 illustrates the youth corporate preferences in different South Korean administrative districts in 2023 by total individual district population size. Big corporations, self-employment, governmental organizations, and public corporations are the most popular corporate types across all regions except Seoul; the ranking orders of these four corporate types vary by region. Youths in Seoul show a relatively higher preference towards professional corporations and a lower preference towards governmental organizations than in other regions.
+
+```{r region4, fig.width=10, fig.height=3}
+
+popmos_a <- popmos |>
+  group_by(REGION) |>
+  filter(PREFERENCE == max(PREFERENCE))
+
+ggplot(popmos_a, aes(area = VALUE, label=REGION, fill=CORPTYPE, subgroup=REGION, subgroup2=CORPTYPE)) +
+  geom_treemap() +
+  geom_treemap_subgroup_border(colour="black") +
+  geom_treemap_subgroup_text(place = "centre", colour = "black",
+                             fontface = "bold", min.size = 0) +
+  scale_fill_brewer(palette = "Pastel1") +
+  labs(title = "Fig 8. 2023 Most Preferred Corporate Type, by Region Population Size",
+       fill = "Corporate Type") +
+  guides(size = FALSE) +
+  theme(
+    panel.border = element_rect(color = "black", fill = NA),
+    panel.spacing = unit(0.5, "lines"),
+    text = element_text(size = 12),
+    title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12), 
+    axis.text = element_text(size = 10),
+    legend.text = element_text(size = 11), 
+    legend.title = element_text(size = 12) 
+  )
+
+
+```
+Figure 8 outlines the most preferred corporate type among youth in 2023 in different South Korean administrative districts by each district's total youth population size. As depicted in Figure 8, most regions show the highest youth corporate preference for big corporations; Busan and Daegu show the highest preference for public corporations, while Gangwon, Gwangju, Jeju, and Sejong show the highest preference for governmental organizations.
+ 
+While the figure makes it seem that youths residing in regions with relatively smaller populations prefer governmental organizations, this should be dealt with cautiously as it only depicts the highest preferred corporate type, even if there is minimal difference with the second highest type.
+
+```{r region2}
+
+corpmos <- CorpStf |>
+  subset(!is.na(REGION)) |>
+  filter(REGION != "All",
+         YEAR== "2023",
+         CORPTYPE != "Total",
+         CORPTYPE != "Other") |>
+  subset(select=-c(YEAR, INCOME, SEX, AGE))
+
+popmos <- LabComb |>
+  subset(!is.na(REGION)) |>
+  filter(REGION != "All",
+         YEAR== "2023",
+         AGE == "All",
+         LABSTAT=="Total Population") |>
+  subset(select=-c(YEAR, SEX, AGE, LABSTAT))
+
+popmos <- left_join(popmos,corpmos, by= "REGION")
+
+popmos_b <- popmos |>
+  group_by(REGION) |>
+  slice_max(order_by = PREFERENCE, n = 2)
+
+popmos_b <- popmos_b |>
+  group_by(REGION) |>
+  mutate(Preference = case_when(
+    PREFERENCE == max(PREFERENCE) ~ "Most Preferred",
+    PREFERENCE == min(PREFERENCE) ~ "Second Most Preferred"
+  ))
+
+popmos_b <- left_join(popmos_b, KorMap, by="REGION")
+
+ggplot(popmos_b, aes(geometry = geometry, fill = CORPTYPE)) +
+  facet_wrap(~Preference) +
+  geom_sf() +
+  theme_void() +
+  scale_fill_brewer("Corporate Types", palette = "Set3") + 
+  theme(line = element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        panel.background = element_blank(),
+        plot.title = element_text(hjust = 0.5, vjust= 5, face="bold")) + 
+  labs(title = "Fig 9. 2023 Most Preferred Corporate Types by Region")
+
+
+```
+Figure 9 shows the most and second-most preferred corporate types among youth in 2023 in different South Korean administrative districts by geographic depiction. Based on the figure, there seems to be little correlation between youth corporate preference and the relative geographical location of a region. However, it is noticeable that several metropolitan cities (and a metropolitan autonomous province), including Sejong, Daegu, Busan, Gwangju, and Jeju, show different preferences than provinces. It is also noticeable that self-employment is the second most preferred corporate type in Gyeonggi, unlike most other regions.
+
+
+
+
+
+## Relationships between Corporate Type Preference and Demographic Factors
+
+This section analyzes the relationship between South Korean youth’s corporate type preferences and three demographic factors: employment rate, population size, and income level.
+
+
+### Employment Rate and Corporate Preferences
+
+```{r empcorp, fig.width=10, fig.height=7}
+
+corpmos_c <- CorpStf |>
+  subset(!is.na(REGION)) |>
+  filter(REGION != "All",
+         CORPTYPE != "Total",
+         CORPTYPE != "Other") |>
+  subset(select=-c(INCOME, SEX, AGE),
+         !is.na(PREFERENCE))
+
+popmos_c <- LabComb |>
+  subset(!is.na(REGION)) |>
+  filter(REGION != "All",
+         AGE == "All",
+         LABSTAT=="emprate") |>
+  subset(select=-c(SEX, AGE, LABSTAT))
+
+popmos_c <- left_join(popmos_c,corpmos_c, by= c("REGION", "YEAR"))
+
+popmos_c <- popmos_c |>
+  subset(!is.na(CORPTYPE))
+
+ggplot(popmos_c, aes(x = log(VALUE), y = log(PREFERENCE+1), color = CORPTYPE, group = CORPTYPE)) +
+  facet_wrap(~CORPTYPE, scale="free_y") +
+  geom_point() +
+  geom_smooth() +
+  labs(title = "Fig 10. Employment Rate and Corporate Preferences",
+       x = "log(Employment Rate)",
+       y = "log(Preference)") +
+  theme(
+    panel.border = element_rect(color = "black", fill = NA),
+    panel.spacing = unit(0.5, "lines"),
+    text = element_text(size = 12),
+    title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12), 
+    axis.text = element_text(size = 10),
+    legend.position = "none"
+  )
+
+
+```
+Figure 10 depicts the correlation between youth employment rate and corporate preferences. Based on the figure, there is a positive correlation between employment rate and corporate preferences in big corporations, self-employment, foreign corporations, and small-mid corporations; a negative correlation in governmental organizations and public corporations; an ambiguous correlation in overseas employment, professional corporations, and venture corporations. Interestingly, the South Korean youth’s preference towards self-employment increases in higher employment rates, contrary to the common assumption that people turn to self-employment if it is difficult to get employed.
+
+
+
+### Population Size and Corporate Preferences
+
+```{r poprel, fig.width=10, fig.height=7}
+
+popmos_c <- LabComb |>
+  subset(!is.na(REGION)) |>
+  filter(REGION != "All",
+         AGE == "All",
+         LABSTAT=="Total Population") |>
+  subset(select=-c(SEX, AGE, LABSTAT))
+
+popmos_c <- left_join(popmos_c,corpmos_c, by= c("REGION", "YEAR"))
+
+popmos_c <- popmos_c |>
+  subset(!is.na(CORPTYPE))
+
+ggplot(popmos_c, aes(x = log(VALUE), y = log(PREFERENCE+1), color = CORPTYPE, group = CORPTYPE)) +
+  facet_wrap(~CORPTYPE, scale="free_y") +
+  geom_point() +
+  geom_smooth() +
+  labs(title = "Fig 11. Population Size and Corporate Preferences",
+       x = "log(Population)",
+       y = "log(Preference)") +
+  theme(
+    panel.border = element_rect(color = "black", fill = NA),
+    panel.spacing = unit(0.5, "lines"),
+    text = element_text(size = 12),
+    title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12), 
+    axis.text = element_text(size = 10),
+    legend.position = "none"
+  )
+
+
+
+
+
+```
+Figure 10 describes the correlation between youth population size and corporate preferences. This figure was difficult to analyze as there were extreme positive outliers (Seoul and Gyeonggi) and extreme negative outliers (Sejong and Jeju) at each end. Also, as other omitted variables, such as societal and regional factors, were not controlled, it is challenging to draw conclusions from the figure. Although it seems that there is a positive correlation between youth corporate preference and population size in big corporations and negative correlation in governmental organizations, it should be thus cautious in making conclusions. For reference, a similar figure that excluded all extreme outliers is provided in Appendix B.
+
+
+
+### Income Level and Corporate Preferences
+
+```{r income, fig.width=10, fig.height=7}
+
+corpmos <- CorpStf |>
+  subset(!is.na(REGION)) |>
+  subset(!is.na(PREFERENCE)) |>
+  filter(REGION == "All",
+         CORPTYPE != "Total") |>
+  subset(select=-c(REGION, AGE, SEX)) |>
+  subset(!is.na(INCOME))
+
+corpmos$INCOME <- factor(corpmos$INCOME, levels = c("~1M", "1~2M", "2~3M", "3~4M", "4~5M", "5~6M", "6M~"))
+
+corpmos_b <- corpmos  |>
+  filter(CORPTYPE != "Other")
+
+ggplot(corpmos_b, aes(x = INCOME, y = log(PREFERENCE), color = CORPTYPE, group = CORPTYPE)) +
+  facet_wrap(~CORPTYPE, scale="free_y") +
+  geom_point() +
+  geom_smooth() +
+  labs(title = "Fig 12. Income and Corporate Preferences",
+       x = "Income",
+       y = "log(Preference)") +
+  theme(
+    panel.border = element_rect(color = "black", fill = NA),
+    panel.spacing = unit(0.5, "lines"),
+    text = element_text(size = 12),
+    title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12), 
+    axis.text = element_text(size = 10),
+    legend.position = "none"
+  )
+  
+
+```
+Figure 11 suggests that there is a negative correlation between the income level and corporate preferences in small/mid corporations, a positive correlation in foreign and professional corporations, and a positive and negative correlation in self-employment. This depicts that employed youth are more interested in foreign and professional corporations as their income is higher and are less interested in small/mid corporations. Employed youth who make lower incomes are interested in self-employment; this interest decreases in higher income.
+
+**According to KOSIS, ‘income level’ only applies to youth population who are employed; thus, this figure depicts corporate preferences of youth respondents that are already employed.
+
+
+
+```{r income2, fig.width=10, fig.height=5}
+
+corpmos <- corpmos |>
+  filter(YEAR == "2023")
+
+corpmos$PREFERENCE <- round(corpmos$PREFERENCE, 1)
+
+ggplot(corpmos, aes(area = PREFERENCE, label = PREFERENCE, fill = CORPTYPE, subgroup = INCOME)) +
+  facet_wrap(~INCOME) +
+  geom_treemap() +
+  geom_treemap_subgroup_border(colour = "black") +
+  geom_treemap_text(place = "centre", alpha = 0.8, colour = "black", min.size = 0) +
+  scale_fill_brewer(palette = "Set3") +
+  labs(title = "Fig 13. 2023 Corporate Preferences (%) by Income Level", fill = "Corporate Type") +
+  theme(
+    text = element_text(size = 12),
+    title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12), 
+    axis.text = element_text(size = 10)
+  )
+
+```
+Employed youth in most income levels have the highest preferences towards big corporations and the second highest towards public corporations. The following are self-employment, governmental organizations, and professional corporations, with ranking order varying upon the income level. Although most income levels generally show similar patterns in corporate preferences, the 2-3M income level is interesting as it is quite different from other income levels. Unlike other income level groups, youth who make 2-3M monthly income have the second highest preference towards self-employment and the third highest towards public corporations. It is also interesting that youth who make less than 1M monthly income show relatively less preference towards self-employment than other income level groups.
+
+
+
+
+
+# Discussions
+
+The study revealed several interesting patterns and correlations in South Korean youth labour trends across various demographic factors and corporate types. 
+
+First, the concentration of the youth population in metropolitan regions such as Seoul and Gyeonggi, as well as the high youth LFP population and population density in these regions, depicts the unbalanced distribution of current and potential youth labour supply. In contrast, certain regions, such as Sejong, Ulsan, and Jeju, especially have very low youth LFP populations and are thus subject to potential labour shortages. This extreme regional disparity in the youth labour population emphasizes the need for governmental policies that create abundant working and living environments for youth in sparsely populated regions to spread out the youth population. Moreover, the varying employment rates across different regions suggest the need for provincial governments with low youth employment rates to focus on developing youth labour policies and creating new jobs. Also, regions should predict corporate types that will most likely suffer from future labour shortages and prepare countermeasures.
+
+Second, a huge increase in labour participation and employment rate among females aged 25-29 depicts a noteworthy shift towards gender equality in the South Korean labour market. Although female LFP and employment rates have always been higher at younger ages during the past 15 years, this is understandable due to factors such as males’ mandatory military service and gender differences in job selection. Males and females also showed several differences in corporate preferences; the result of the study suggests that this difference may be due to males and females’ different values in choosing jobs. In the future, governments and businesses should consider the corporate preferences of male and female youths to predict labour allocation and prepare equitable and harmonious workplaces.
+
+Finally, the correlations between demographic factors and youth corporate preferences provide valuable insights across different corporate types. First, the positive correlation between employment rate and corporate preferences in self-employment was contrary to the initial assumption and created future areas for research. Second, a strong negative correlation between the employment rate and corporate preferences in governmental organizations and low preferences towards governmental organizations among youth in Seoul and Gyeonggi illustrate the social phenomenon of choosing job security over income during economic crises. Third, a positive correlation between income level and corporate preferences in foreign and professional corporations implies an interest in factors other than pure income, such as professionalism and work-life balance, among youth earning higher incomes.
+
+Future research may focus on the underlying reasons behind the observed trends, exploring aspects such as socioeconomic factors, cultural influences, and individual decision-making. Additionally, longitudinal studies could provide deeper insights into the long-term impact of changing youth labour trends in South Korea.
+
+In conclusion, the analysis of South Korean youth labour trends and corporate preferences emphasizes how different demographic, regional, and socioeconomic factors influence the development of the South Korean youth labour market. The results of the study will serve as a basis for informed policymaking and further research to create a more inclusive and responsive labour market for the South Korean youth population.
+
+
+
+
+
+# References
+
+A Study on Factors Affecting the Youth Employment Rate: Focusing on Data from 31 Cities and Counties in Gyeonggi-Do, South Korea. (2015). Indian Journal of Science and Technology. https://doi.org/10.17485/ijst/2015/v8is5/61619
+
+“Economically Active Population by Region/Age (행정구역(시/도)/연령별 경제활동인구),” 2009-2023. Korean Statistical Information Service (국가통계포털).
+
+“Economically Active Population by Sex/Age (성/연령별 경제활동인구),” 2009-2023.Korean Statistical Information Service (국가통계포털). 
+
+“Workplaces Preferred by Teenagers (Ages 13-34) (청(소)년이 선호하는 직장 (13~34세 인구)),” 2009-2023. Korean Statistical Information Service (국가통계포털). 
+
+Terminology Search, Statistical Data Description Service (통계설명자료서비스: 용어조회). Statistics Korea (통계청). 
+
+
+
+
+
+# Appendix
+
+## Appendix A. Measures and Definitions
+
+### Administrative District (행정구역) (code: REGION)
+Seoul (서울특별시), Busan (부산광역시), Chungcheongbuk (충청북도), Chungcheongnam (충청남도), Daegu (대구광역시), Daejeon (대전광역시), Gangwon (강원특별자치도), Gwangju (광주광역시), Gyeonggi (경기도), Gyeongsangbuk (경상북도), Gyeongsangnam (경상남도), Incheon (인천광역시), Jeju (제주특별자치도), Jeollabuk (전라북도), Jeollanam (전라남도), Sejong (세종특별자치시), Ulsan (울산광역시), All (계)
+
+### Age (연령계층) (code: AGE)
+Ages 15-19 (code: T1519), Ages 20-24 (code: T2024), Ages 25-29 (code: T2529), Ages 15-29 (code: All)
+
+### Corporate Preference ((직장) 선호도) (code: PREFERENCE)
+Percentage (%) of the studied sample population that preferred to work at a specific corporate type over other corporate types
+
+### Corporate Type (code: CORPTYPE)
+Big Corp (대기업), Foreign Corp (외국계기업), Governmental Organization (국가기관), Overseas Employment (해외취업), Professional Corp (전문직기업), Public Corp (공기업), Self-Employment (자영업 (창업 등)), Small/Mid Corp (중소기업), Venture Corp (벤처기업), Other (기타), All (계)
+
+### Economic Activity (경제활동)
+Engaging in work with income to produce goods or services
+
+The following activities are not considered economic activities:
+
+1. unproductive activities against the law (e.g. gambling, prostitution, etc.)
+2. Forced labor and volunteer activities under the law
+3. investment activities such as horse racing, racing, securities, and gifts
+
+### Employed (취업자)
+1. A person who worked for at least one hour for the purpose of income during the week subject to investigation
+2. A person who has worked at least 18 hours per week as a family worker who has helped increase the income of a farm or business run by his/her household, even if he/she does not receive a direct gain or income (unpaid family worker)
+3. A person on temporary leave who has a job or business but has not been able to work during the week subject to investigation due to temporary illness, non-compliance with the diary, vacation or annual leave, labor disputes, etc.
+
+### Employment Rate (고용률) (code: emprate)
+Percentage of employed people among the population
+
+### Household (가구)
+A group of people who live and make a living together
+
+### Household Member (가구원)
+All members living together in a household
+
+### Income Level (가구소득) (code: INCOME)
+~1M, 1-2M, 2-3M, 3-4M, 4-5M, 5-6M, 6M~
+
+Unit: Average monthly sum of income of all household members engaged in economic activities (excluding income other than economic activities), in Korean Won (₩)
+
+### Labour Force Participant (LFP) Population (경제활동인구) (code: LFP)
+Number of people who are economically active (employed + unemployed) among the population, in thousands
+
+### LFP Rate (경제활동참가율) (code: LFPrate) 
+Percentage of people who are economically active (employed + unemployed) among the population
+
+### (Youth) Population (청(소)년 인구) (code: Total Population)
+Number of persons aged 15-29 residing in the Republic of Korea, in thousands
+
+### Sex (성별) (code: SEX)
+Male (남성), Female (여성), All (계)
+
+### Year (시점 (연도)) (code: YEAR)
+All consecutive 15 years from 2009 to 2023
+
+
+
+All measures and definitions consulted the Terminology Search Engine from Statistics Korea’s Statistical Data Description Service (통계설명자료서비스: 용어조회). See https://www.k-stat.go.kr/metasvc/msda100/worddc for more information.
+
+
+
+## Appendix B. Related Figures
+
+```{r poprel2, fig.width=10, fig.height=7}
+
+popmos_e <- LabComb |>
+  subset(!is.na(REGION)) |>
+  filter(REGION != "All",
+         REGION != "Seoul",
+         REGION != "Gyeonggi",
+         REGION != "Sejong",
+         REGION != "Jeju",
+         REGION != "Ulsan",
+         AGE == "All",
+         LABSTAT=="Total Population") |>
+  subset(select=-c(SEX, AGE, LABSTAT))
+
+popmos_e <- left_join(popmos_e,corpmos_c, by= c("REGION", "YEAR"))
+
+popmos_e <- popmos_e |>
+  subset(!is.na(CORPTYPE))
+
+ggplot(popmos_e, aes(x = log(VALUE), y = log(PREFERENCE+1), color = CORPTYPE, group = CORPTYPE)) +
+  facet_wrap(~CORPTYPE, scale="free_y") +
+  geom_point() +
+  geom_smooth() +
+  labs(title = "Appendix B-1. Population Size and Corporate Preferences (outliers excluded)",
+       x = "log(Population)",
+       y = "log(Preference)") +
+  theme(
+    panel.border = element_rect(color = "black", fill = NA),
+    panel.spacing = unit(0.5, "lines"),
+    text = element_text(size = 12),
+    title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12), 
+    axis.text = element_text(size = 10),
+    legend.position = "none"
+  )
+
+
+```
+
+
+
